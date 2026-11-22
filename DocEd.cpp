@@ -4,577 +4,609 @@
 #include <vector>
 #include <filesystem>
 #include <limits>
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 using namespace std;
 namespace fs = std::filesystem;
-
-const string folderName = "documents";
+const string folder = "documents";
 vector<string> lines;
-vector<vector<string>> undoHistory;
-vector<vector<string>> redoHistory;
+vector<vector<string>> undoList;
+vector<vector<string>> redoList;
+vector<string> savedLines;
 string currentFile = "";
-bool documentOpen = false;
-bool unsavedChanges = false;
-
-void saveHistory()
-{
-    undoHistory.push_back(lines);
-    if (undoHistory.size() > 50)
-        undoHistory.erase(undoHistory.begin());
-    redoHistory.clear();
+bool opened = false;
+bool changed = false;
+// Clear the console screen.
+void clearScreen() {
+#ifdef _WIN32
+    system("cls");
+#else
+    system("clear");
+#endif
 }
-
-void readFile(const string& fileName)
-{
-    lines.clear();
-    ifstream file(fileName);
-    string line;
-    while (getline(file, line))
-        lines.push_back(line);
+void waitEnter() {
+    cout << "\nPress Enter to continue...";
+    string temp;
+    getline(cin, temp);
 }
-
-bool saveFile()
-{
-    if (!documentOpen)
-    {
-        cout << "Please open or create a document first.\n";
-        return false;
+string getExtension(string name) {
+    string ext = fs::path(name).extension().string();
+    for (int i = 0; i < (int)ext.length(); i++) {
+        ext[i] = (char)tolower((unsigned char)ext[i]);
     }
-
+    return ext;
+}
+bool isAllowedName(string name) {
+    if (name.empty() || name == "." || name == "..")
+        return false;
+    for (int i = 0; i < (int)name.length(); i++) {
+        char c = name[i];
+        if (!isalnum((unsigned char)c) && c != '_' && c != '-' && c != '.') {
+            return false;
+        }
+    }
+    return name.find("..") == string::npos;
+}
+bool isSupported(string ext) {
+    vector<string> types = {
+        ".txt", ".log", ".md", ".markdown", ".csv",
+        ".cpp", ".cc", ".cxx", ".c", ".h", ".hpp",
+        ".py", ".java", ".js", ".html", ".css",
+        ".json", ".xml", ".sql"
+    };
+    return find(types.begin(), types.end(), ext) != types.end();
+}
+bool isCodeFile(string ext) {
+    return ext == ".cpp" || ext == ".cc" || ext == ".cxx" ||
+           ext == ".c" || ext == ".py" || ext == ".java" ||
+           ext == ".js";
+}
+string languageName(string ext) {
+    if (ext == ".cpp" || ext == ".cc" || ext == ".cxx") {
+        return "C++";
+    }
+    if (ext == ".c") {
+        return "C";
+    }
+    if (ext == ".py") {
+        return "Python";
+    }
+    if (ext == ".java") {
+        return "Java";
+    }
+    if (ext == ".js") {
+        return "JavaScript";
+    }
+    if (ext == ".html") {
+        return "HTML";
+    }
+    if (ext == ".css") {
+        return "CSS";
+    }
+    if (ext == ".sql") {
+        return "SQL";
+    }
+    if (ext == ".md" || ext == ".markdown") {
+        return "Markdown";
+    }
+    if (ext == ".csv") {
+        return "CSV";
+    }
+    if (ext == ".json") {
+        return "JSON";
+    }
+    if (ext == ".xml") {
+        return "XML";
+    }
+    if (ext == ".h" || ext == ".hpp") {
+        return "Header file";
+    }
+    return "Text file";
+}
+string readText(string message) {
+    cout << message;
+    string value;
+    getline(cin, value);
+    return value;
+}
+int readNumber(string message) {
+    string input;
+    cout << message;
+    getline(cin, input);
+    try {
+        size_t used = 0;
+        int number = stoi(input, &used);
+        if (used == input.size())
+            return number;
+    }
+    catch (...) {
+    }
+    return -1;
+}
+void updateChanged() {
+    changed = (lines != savedLines);
+}
+void rememberChange() {
+    undoList.push_back(lines);
+    if (undoList.size() > 30)
+        undoList.erase(undoList.begin());
+    redoList.clear();
+}
+void saveFile() {
+    if (!opened)
+        return;
     ofstream file(currentFile);
-    if (!file)
-    {
-        cout << "Could not save the document.\n";
-        return false;
+    if (!file) {
+        cout << "Could not save this file.\n";
+        return;
     }
-
-    for (size_t i = 0; i < lines.size(); i++)
-    {
+    for (size_t i = 0; i < lines.size(); i++) {
         file << lines[i];
         if (i + 1 < lines.size())
             file << '\n';
     }
-
-    file.close();
-    unsavedChanges = false;
-    cout << "Document saved successfully.\n";
-    return true;
+    savedLines = lines;
+    updateChanged();
+    cout << "File saved.\n";
 }
-
-void showDocument()
-{
-    if (!documentOpen)
-    {
-        cout << "Please open or create a document first.\n";
-        return;
-    }
-
-    cout << "\n========== DOCUMENT ==========" << endl;
-    if (lines.empty())
-        cout << "(Document is empty)\n";
-    else
-    {
-        for (size_t i = 0; i < lines.size(); i++)
-            cout << i + 1 << ". " << lines[i] << '\n';
-    }
-    cout << "==============================\n";
-    if (unsavedChanges)
-        cout << "You have unsaved changes.\n";
-}
-
-string makeTextFileName(string name)
-{
-    if (name.size() < 4 || name.substr(name.size() - 4) != ".txt")
-        name += ".txt";
-    return name;
-}
-
-void createDocument()
-{
-    string name;
-    cout << "Enter a name for the new document: ";
-    getline(cin, name);
-
-    if (name.empty())
-    {
-        cout << "Document name cannot be empty.\n";
-        return;
-    }
-
-    name = makeTextFileName(name);
-    string path = folderName + "/" + name;
-
-    if (fs::exists(path))
-    {
-        cout << "A document with this name already exists.\n";
-        return;
-    }
-
-    ofstream file(path);
-    if (!file)
-    {
-        cout << "Could not create the document.\n";
-        return;
-    }
-    file.close();
-
-    currentFile = path;
+void loadFile(string path) {
     lines.clear();
-    undoHistory.clear();
-    redoHistory.clear();
-    documentOpen = true;
-    unsavedChanges = false;
-    cout << "New document created and opened.\n";
-}
-
-void openDocument()
-{
-    string name;
-    cout << "Enter the document name to open: ";
-    getline(cin, name);
-
-    if (name.empty())
-    {
-        cout << "Document name cannot be empty.\n";
-        return;
-    }
-
-    name = makeTextFileName(name);
-    string path = folderName + "/" + name;
-    if (!fs::exists(path))
-    {
-        cout << "Document not found in the documents folder.\n";
-        return;
-    }
-
+    undoList.clear();
+    redoList.clear();
+    ifstream file(path);
+    string line;
+    while (getline(file, line))
+        lines.push_back(line);
     currentFile = path;
-    readFile(currentFile);
-    undoHistory.clear();
-    redoHistory.clear();
-    documentOpen = true;
-    unsavedChanges = false;
-    cout << "Document opened successfully.\n";
-    showDocument();
+    savedLines = lines;
+    opened = true;
+    changed = false;
 }
-
-void editDocument()
-{
-    if (!documentOpen)
-    {
-        cout << "Please open or create a document first.\n";
-        return;
-    }
-
-    cout << "\nEnter the complete document content below.\n";
-    cout << "Type END on a separate line when you have finished.\n";
-    cout << "----------------------------------------------\n";
-
+void viewFile() {
+    clearScreen();
+    cout << "--- "
+         << fs::path(currentFile).filename().string()
+         << " ---\n\n";
+    if (lines.empty())
+        cout << "(Empty file)\n";
+    for (size_t i = 0; i < lines.size(); i++)
+        cout << i + 1 << "  " << lines[i] << '\n';
+}
+void editFile() {
+    clearScreen();
+    cout << "EDIT FILE: "
+         << fs::path(currentFile).filename().string() << "\n";
+    cout << "This option replaces the full content.\n";
+    cout << "Type END on a separate line when finished.\n\n";
     vector<string> newLines;
-    string text;
-    while (getline(cin, text))
-    {
-        if (text == "END")
-            break;
-        newLines.push_back(text);
-    }
-
-    if (cin.eof())
-    {
-        cout << "Input ended before END was entered.\n";
+    string line;
+    while (getline(cin, line) && line != "END")
+        newLines.push_back(line);
+    if (!cin) {
         cin.clear();
+        cout << "Input ended. No changes were made.\n";
         return;
     }
-
-    saveHistory();
-    lines = newLines;
-    unsavedChanges = true;
-    cout << "Document content updated. Use Save Document to keep the changes.\n";
+    if (newLines != lines) {
+        rememberChange();
+        lines = newLines;
+        updateChanged();
+        cout << "Changes made. Save the file to keep them.\n";
+    }
+    else {
+        cout << "No changes made.\n";
+    }
 }
-
-void searchText()
-{
-    if (!documentOpen)
-    {
-        cout << "Please open or create a document first.\n";
+void addText() {
+    clearScreen();
+    cout << "ADD TEXT TO END OF FILE\n";
+    cout << "Type END on a separate line when finished.\n\n";
+    vector<string> extraLines;
+    string line;
+    while (getline(cin, line) && line != "END")
+        extraLines.push_back(line);
+    if (!cin) {
+        cin.clear();
+        cout << "Input ended. No changes were made.\n";
         return;
     }
-
-    string search;
-    cout << "Enter the text to search for: ";
-    getline(cin, search);
-    if (search.empty())
-    {
+    if (!extraLines.empty()) {
+        rememberChange();
+        for (int i = 0; i < (int)extraLines.size(); i++) {
+            lines.push_back(extraLines[i]);
+        }
+        updateChanged();
+        cout << "Text added.\n";
+    }
+    else {
+        cout << "Nothing was added.\n";
+    }
+}
+void insertLine() {
+    clearScreen();
+    int position = readNumber("Insert before which line number? ");
+    if (position < 1 || position > (int)lines.size() + 1) {
+        cout << "Invalid line number.\n";
+        return;
+    }
+    string text = readText("Enter the new line: ");
+    rememberChange();
+    lines.insert(lines.begin() + position - 1, text);
+    updateChanged();
+    cout << "Line inserted.\n";
+}
+void deleteLine() {
+    clearScreen();
+    if (lines.empty()) {
+        cout << "The file is empty.\n";
+        return;
+    }
+    viewFile();
+    int position = readNumber("Delete which line number? ");
+    if (position < 1 || position > (int)lines.size()) {
+        cout << "Invalid line number.\n";
+        return;
+    }
+    rememberChange();
+    lines.erase(lines.begin() + position - 1);
+    updateChanged();
+    cout << "Line deleted.\n";
+}
+void findText() {
+    clearScreen();
+    string word = readText("Find text: ");
+    if (word.empty()) {
         cout << "Search text cannot be empty.\n";
         return;
     }
-
     bool found = false;
-    for (size_t i = 0; i < lines.size(); i++)
-    {
-        if (lines[i].find(search) != string::npos)
-        {
-            cout << "Found on line " << i + 1 << ": " << lines[i] << '\n';
+    int total = 0;
+    for (size_t i = 0; i < lines.size(); i++) {
+        size_t position = 0;
+        int lineCount = 0;
+        while ((position = lines[i].find(word, position))
+               != string::npos) {
+            lineCount++;
+            total++;
+            position += word.size();
+        }
+        if (lineCount > 0) {
+            cout << "Line " << i + 1
+                 << " (" << lineCount << " match(es)): ";
+            cout << lines[i] << '\n';
             found = true;
         }
     }
-    if (!found)
-        cout << "Text was not found.\n";
+    if (found)
+        cout << "\nTotal matches: " << total << '\n';
+    else
+        cout << "Text not found.\n";
 }
-
-void searchDocumentNames()
-{
-    string namePart;
-    cout << "Enter part of the document name to search for: ";
-    getline(cin, namePart);
-    if (namePart.empty())
-    {
+void replaceText() {
+    clearScreen();
+    string oldText = readText("Find: ");
+    if (oldText.empty()) {
         cout << "Search text cannot be empty.\n";
         return;
     }
-
-    bool found = false;
-    cout << "\nMatching documents:\n";
-    for (const auto& entry : fs::directory_iterator(folderName))
-    {
-        if (entry.is_regular_file() && entry.path().extension() == ".txt")
-        {
-            string fileName = entry.path().filename().string();
-            if (fileName.find(namePart) != string::npos)
-            {
-                cout << fileName << '\n';
-                found = true;
-            }
-        }
-    }
-    if (!found)
-        cout << "No document names matched your search.\n";
-}
-
-void searchAllDocumentsByContent()
-{
-    string search;
-    cout << "Enter a word or phrase to search across saved documents: ";
-    getline(cin, search);
-    if (search.empty())
-    {
-        cout << "Search text cannot be empty.\n";
-        return;
-    }
-
-    bool found = false;
-    for (const auto& entry : fs::directory_iterator(folderName))
-    {
-        if (!entry.is_regular_file() || entry.path().extension() != ".txt")
-            continue;
-
-        if (documentOpen && entry.path().string() == currentFile && unsavedChanges)
-        {
-            for (size_t i = 0; i < lines.size(); i++)
-            {
-                if (lines[i].find(search) != string::npos)
-                {
-                    cout << entry.path().filename().string() << " (current unsaved version), line "
-                         << i + 1 << ": " << lines[i] << '\n';
-                    found = true;
-                }
-            }
-        }
-        else
-        {
-            ifstream file(entry.path());
-            string line;
-            size_t lineNumber = 0;
-            while (getline(file, line))
-            {
-                lineNumber++;
-                if (line.find(search) != string::npos)
-                {
-                    cout << entry.path().filename().string() << ", line "
-                         << lineNumber << ": " << line << '\n';
-                    found = true;
-                }
-            }
-        }
-    }
-
-    if (!found)
-        cout << "No matching content was found in saved documents.\n";
-}
-
-void replaceText()
-{
-    if (!documentOpen)
-    {
-        cout << "Please open or create a document first.\n";
-        return;
-    }
-
-    string oldText, newText;
-    cout << "Enter the text to find: ";
-    getline(cin, oldText);
-    if (oldText.empty())
-    {
-        cout << "Text to find cannot be empty.\n";
-        return;
-    }
-    cout << "Enter the replacement text: ";
-    getline(cin, newText);
-
-    vector<string> updatedLines = lines;
-    int replacements = 0;
-    for (string& line : updatedLines)
-    {
+    string newText = readText("Replace with: ");
+    vector<string> newLines = lines;
+    int count = 0;
+    for (string& line : newLines) {
         size_t position = 0;
-        while ((position = line.find(oldText, position)) != string::npos)
-        {
-            line.replace(position, oldText.length(), newText);
-            position += newText.length();
-            replacements++;
+        while ((position = line.find(oldText, position))
+               != string::npos) {
+            line.replace(position, oldText.size(), newText);
+            position += newText.size();
+            count++;
         }
     }
-
-    if (replacements == 0)
-    {
-        cout << "Text was not found, so nothing was changed.\n";
+    if (count == 0) {
+        cout << "Text not found.\n";
         return;
     }
-
-    saveHistory();
-    lines = updatedLines;
-    unsavedChanges = true;
-    cout << "Replacement complete. Number of replacements: " << replacements << '\n';
+    rememberChange();
+    lines = newLines;
+    updateChanged();
+    cout << count << " replacement(s) made.\n";
 }
-
-void undoChange()
-{
-    if (!documentOpen)
-    {
-        cout << "Please open or create a document first.\n";
-        return;
-    }
-    if (undoHistory.empty())
-    {
-        cout << "There is no change to undo.\n";
-        return;
-    }
-
-    redoHistory.push_back(lines);
-    lines = undoHistory.back();
-    undoHistory.pop_back();
-    unsavedChanges = true;
-    cout << "Last change undone.\n";
-}
-
-void redoChange()
-{
-    if (!documentOpen)
-    {
-        cout << "Please open or create a document first.\n";
-        return;
-    }
-    if (redoHistory.empty())
-    {
-        cout << "There is no change to redo.\n";
-        return;
-    }
-
-    undoHistory.push_back(lines);
-    lines = redoHistory.back();
-    redoHistory.pop_back();
-    unsavedChanges = true;
-    cout << "Change restored.\n";
-}
-
-void showStatistics()
-{
-    if (!documentOpen)
-    {
-        cout << "Please open or create a document first.\n";
-        return;
-    }
-
-    size_t characters = 0;
-    size_t words = 0;
-    for (const string& line : lines)
-    {
-        characters += line.length();
+void showStatistics() {
+    clearScreen();
+    int words = 0;
+    int characters = 0;
+    for (int i = 0; i < (int)lines.size(); i++) {
+        string line = lines[i];
+        characters += (int)line.size();
         bool insideWord = false;
-        for (char ch : line)
-        {
-            if (ch == ' ' || ch == '\t')
+        for (int j = 0; j < (int)line.length(); j++) {
+            char c = line[j];
+            if (isspace((unsigned char)c)) {
                 insideWord = false;
-            else if (!insideWord)
-            {
+            }
+            else if (!insideWord) {
                 words++;
                 insideWord = true;
             }
         }
     }
-
-    cout << "\n----- Document Statistics -----\n";
-    cout << "Lines      : " << lines.size() << '\n';
-    cout << "Words      : " << words << '\n';
-    cout << "Characters : " << characters << " (spaces between words included)\n";
-    cout << "--------------------------------\n";
+    cout << "DOCUMENT STATISTICS\n\n";
+    cout << "Lines: " << lines.size() << '\n';
+    cout << "Words: " << words << '\n';
+    cout << "Characters (without line breaks): "
+         << characters << '\n';
 }
-
-void listDocuments()
-{
-    cout << "\n----- Saved Text Documents -----\n";
+void undoChange() {
+    clearScreen();
+    if (undoList.empty()) {
+        cout << "Nothing to undo.\n";
+        return;
+    }
+    redoList.push_back(lines);
+    lines = undoList.back();
+    undoList.pop_back();
+    updateChanged();
+    cout << "Undo completed.\n";
+}
+void redoChange() {
+    clearScreen();
+    if (redoList.empty()) {
+        cout << "Nothing to redo.\n";
+        return;
+    }
+    undoList.push_back(lines);
+    lines = redoList.back();
+    redoList.pop_back();
+    updateChanged();
+    cout << "Redo completed.\n";
+}
+string quotePath(string path) {
+    return "\"" + path + "\"";
+}
+void compileAndRun() {
+    clearScreen();
+    string ext = getExtension(currentFile);
+    string name = fs::path(currentFile).filename().string();
+    string base = fs::path(currentFile).stem().string();
+    string command;
+    string runCommand;
+    cout << "FILE: " << name << "\n";
+    cout << "TYPE: " << languageName(ext) << "\n\n";
+    if (changed) {
+        cout << "Saving latest changes...\n";
+        saveFile();
+    }
+    if (ext == ".cpp" || ext == ".cc" ||
+        ext == ".cxx" || ext == ".c") {
+        string outputPath = (fs::path(folder) / base).string();
+#ifdef _WIN32
+        outputPath += ".exe";
+#endif
+        if (ext == ".c")
+            command = "gcc " + quotePath(currentFile)
+                      + " -o " + quotePath(outputPath);
+        else
+            command = "g++ " + quotePath(currentFile)
+                      + " -o " + quotePath(outputPath);
+#ifdef _WIN32
+        runCommand = quotePath(outputPath);
+#else
+        runCommand = quotePath("./" + outputPath);
+#endif
+    }
+    else if (ext == ".py") {
+#ifdef _WIN32
+        command = "py " + quotePath(currentFile);
+#else
+        command = "python3 " + quotePath(currentFile);
+#endif
+    }
+    else if (ext == ".js") {
+        command = "node " + quotePath(currentFile);
+    }
+    else if (ext == ".java") {
+        command = "javac " + quotePath(currentFile);
+        runCommand = "java -cp " + quotePath(folder)
+                     + " " + base;
+    }
+    if (ext == ".cpp" || ext == ".cc" ||
+        ext == ".cxx" || ext == ".c" || ext == ".java") {
+        cout << "Compiling...\n\n";
+        int result = system(command.c_str());
+        if (result != 0) {
+            cout << "\nCompilation failed. Check the error messages above.\n";
+            return;
+        }
+        cout << "\nCompilation successful.\n";
+        cout << "Running program...\n\n";
+        system(runCommand.c_str());
+    }
+    else {
+        cout << "Running program...\n\n";
+        system(command.c_str());
+    }
+    cout << "\nProgram finished.\n";
+}
+void listFiles() {
+    clearScreen();
+    cout << "FILES IN DOCUMENTS\n\n";
     bool found = false;
-    for (const auto& entry : fs::directory_iterator(folderName))
-    {
-        if (entry.is_regular_file() && entry.path().extension() == ".txt")
-        {
-            cout << entry.path().filename().string() << '\n';
+    for (const auto& item : fs::directory_iterator(folder)) {
+        if (item.is_regular_file() &&
+            isSupported(getExtension(item.path().string()))) {
+            cout << item.path().filename().string() << '\n';
             found = true;
         }
     }
     if (!found)
-        cout << "No text documents found.\n";
-    cout << "--------------------------------\n";
+        cout << "No files yet.\n";
 }
-
-void closeDocument()
-{
-    if (!documentOpen)
-    {
-        cout << "No document is currently open.\n";
-        return;
+bool closeFile() {
+    if (changed) {
+        string answer = readText(
+            "Unsaved changes. Save? (y/n/c to cancel): "
+        );
+        if (answer == "c" || answer == "C")
+            return false;
+        if (answer == "y" || answer == "Y") {
+            saveFile();
+            if (changed)
+                return false;
+        }
     }
-
-    if (unsavedChanges)
-    {
-        char choice;
-        cout << "There are unsaved changes. Save before closing? (y/n): ";
-        cin >> choice;
-        cin.ignore(numeric_limits<streamsize>::max(), '\n');
-        if (choice == 'y' || choice == 'Y')
-        {
-            if (!saveFile())
+    lines.clear();
+    savedLines.clear();
+    undoList.clear();
+    redoList.clear();
+    currentFile = "";
+    opened = false;
+    changed = false;
+    return true;
+}
+void documentMenu() {
+    while (opened) {
+        clearScreen();
+        string ext = getExtension(currentFile);
+        cout << "DOCED  |  "
+             << fs::path(currentFile).filename().string();
+        if (changed)
+            cout << "  *";
+        cout << "\n" << languageName(ext) << "\n\n";
+        cout << "1. View file       2. Edit all\n";
+        cout << "3. Add text        4. Insert line\n";
+        cout << "5. Delete line     6. Find / Search\n";
+        cout << "7. Find & Replace  8. Undo\n";
+        cout << "9. Redo           10. Save\n";
+        cout << "11. Document statistics\n";
+        if (isCodeFile(ext))
+            cout << "12. Compile / Run\n";
+        cout << "0. Close file\n\n";
+        int choice = readNumber("Choose: ");
+        if (choice == 0) {
+            if (closeFile())
                 return;
         }
-    }
-
-    currentFile = "";
-    lines.clear();
-    undoHistory.clear();
-    redoHistory.clear();
-    documentOpen = false;
-    unsavedChanges = false;
-    cout << "Document closed.\n";
-}
-
-void showHelpSupport()
-{
-    cout << "\n========== HELP AND SUPPORT - VERSION 2 ==========\n";
-    cout << "WELCOME\n";
-    cout << "This is a simple console-based editor for plain-text .txt files.\n\n";
-    cout << "GETTING STARTED\n";
-    cout << "1. Choose 1 to create a document. Enter a name such as Notes.\n";
-    cout << "2. Choose 2 to open a saved document by its name.\n";
-    cout << "3. Choose 3 to read the currently open document.\n";
-    cout << "4. Choose 4 to replace the whole document with new content.\n";
-    cout << "   Type your text on separate lines, then type END alone on a line.\n";
-    cout << "5. Choose 13 to save your changes.\n\n";
-    cout << "SEARCH AND EDITING\n";
-    cout << "- Option 5 searches for a word or phrase in the open document.\n";
-    cout << "- Option 6 searches document names.\n";
-    cout << "- Option 7 searches text inside all saved documents.\n";
-    cout << "- Option 8 replaces matching text in the open document.\n";
-    cout << "- Options 9 and 10 undo and redo editing changes.\n";
-    cout << "- Option 11 shows line, word, and character counts.\n";
-    cout << "- Option 12 lists saved text documents.\n\n";
-    cout << "SAVING AND CLOSING\n";
-    cout << "Documents are stored in the 'documents' folder as .txt files.\n";
-    cout << "Save your work before closing. The program warns about unsaved changes.\n\n";
-    cout << "TIPS AND LIMITATIONS\n";
-    cout << "- Enter END in capital letters on a separate line to finish editing.\n";
-    cout << "- Do not include END as a line of document content.\n";
-    cout << "- This version supports plain text, not Word formatting or PDF editing.\n";
-    cout << "- If a document cannot be opened, check its name in the documents folder.\n";
-    cout << "==================================================\n";
-}
-
-void showMenu()
-{
-    cout << "\n========== DOCUMENT EDITOR ==========\n";
-    cout << "1. Create New Document\n";
-    cout << "2. Open Existing Document\n";
-    cout << "3. Read Current Document\n";
-    cout << "4. Edit Entire Document\n";
-    cout << "5. Search Word/Phrase in Current Document\n";
-    cout << "6. Search Document by File Name\n";
-    cout << "7. Search Content Across All Documents\n";
-    cout << "8. Find and Replace Text in Current Document\n";
-    cout << "9. Undo\n";
-    cout << "10. Redo\n";
-    cout << "11. Show Document Statistics\n";
-    cout << "12. List Saved Documents\n";
-    cout << "13. Save Document\n";
-    cout << "14. Close Current Document\n";
-    cout << "15. Help and Support - How to Use the Editor\n";
-    cout << "0. Exit\n";
-    cout << "Choose an option: ";
-}
-
-int main()
-{
-    try
-    {
-        if (!fs::exists(folderName))
-            fs::create_directory(folderName);
-    }
-    catch (const fs::filesystem_error& error)
-    {
-        cout << "Could not prepare the documents folder: " << error.what() << '\n';
-        return 1;
-    }
-
-    int choice;
-    do
-    {
-        showMenu();
-        if (!(cin >> choice))
-        {
-            cin.clear();
-            cin.ignore(numeric_limits<streamsize>::max(), '\n');
-            cout << "Invalid input. Please enter a menu number.\n";
-            continue;
+        else if (choice == 1)
+            viewFile();
+        else if (choice == 2)
+            editFile();
+        else if (choice == 3)
+            addText();
+        else if (choice == 4)
+            insertLine();
+        else if (choice == 5)
+            deleteLine();
+        else if (choice == 6)
+            findText();
+        else if (choice == 7)
+            replaceText();
+        else if (choice == 8)
+            undoChange();
+        else if (choice == 9)
+            redoChange();
+        else if (choice == 10) {
+            clearScreen();
+            saveFile();
         }
-        cin.ignore(numeric_limits<streamsize>::max(), '\n');
-
-        switch (choice)
-        {
-            case 1: createDocument(); break;
-            case 2: openDocument(); break;
-            case 3: showDocument(); break;
-            case 4: editDocument(); break;
-            case 5: searchText(); break;
-            case 6: searchDocumentNames(); break;
-            case 7: searchAllDocumentsByContent(); break;
-            case 8: replaceText(); break;
-            case 9: undoChange(); break;
-            case 10: redoChange(); break;
-            case 11: showStatistics(); break;
-            case 12: listDocuments(); break;
-            case 13: saveFile(); break;
-            case 14: closeDocument(); break;
-            case 15: showHelpSupport(); break;
-            case 0:
-                if (documentOpen && unsavedChanges)
-                {
-                    char saveChoice;
-                    cout << "You have unsaved changes. Save before exiting? (y/n): ";
-                    cin >> saveChoice;
-                    cin.ignore(numeric_limits<streamsize>::max(), '\n');
-                    if (saveChoice == 'y' || saveChoice == 'Y')
-                        saveFile();
-                }
-                cout << "Thank you for using Document Editor.\n";
-                break;
-            default: cout << "Invalid option. Please choose again.\n";
+        else if (choice == 11)
+            showStatistics();
+        else if (choice == 12 && isCodeFile(ext))
+            compileAndRun();
+        else {
+            clearScreen();
+            cout << "Please choose a valid option.\n";
         }
-    } while (choice != 0);
-
+        if (opened)
+            waitEnter();
+    }
+}
+void createFile() {
+    clearScreen();
+    string name = readText(
+        "New file name (example: hello.cpp): "
+    );
+    if (!isAllowedName(name)) {
+        cout << "Invalid file name. Use letters, numbers, _ or -.\n";
+        return;
+    }
+    if (fs::path(name).extension().empty())
+        name += ".txt";
+    if (!isSupported(getExtension(name))) {
+        cout << "This file type is not supported.\n";
+        return;
+    }
+    string path = (fs::path(folder) / name).string();
+    if (fs::exists(path)) {
+        cout << "File already exists. Open it instead.\n";
+        return;
+    }
+    ofstream file(path);
+    if (!file) {
+        cout << "Could not create the file.\n";
+        return;
+    }
+    file.close();
+    loadFile(path);
+    cout << "Created: " << name << "\n";
+    cout << "Detected type: "
+         << languageName(getExtension(name)) << "\n";
+}
+void openFile() {
+    clearScreen();
+    string name = readText(
+        "File name from documents folder: "
+    );
+    if (!isAllowedName(name) ||
+        !isSupported(getExtension(name))) {
+        cout << "Invalid file name or unsupported file type.\n";
+        return;
+    }
+    string path = (fs::path(folder) / name).string();
+    if (!fs::exists(path) || !fs::is_regular_file(path)) {
+        cout << "File not found.\n";
+        return;
+    }
+    loadFile(path);
+    cout << "Opened: " << name << "\n";
+    cout << "Detected type: "
+         << languageName(getExtension(name)) << "\n";
+}
+int main() {
+    fs::create_directories(folder);
+    while (true) {
+        clearScreen();
+        cout << " Document Editor \n\n";
+        cout << "1. Create file\n";
+        cout << "2. Open file\n";
+        cout << "3. List files\n";
+        cout << "0. Exit\n\n";
+        int choice = readNumber("Choose: ");
+        if (choice == 0)
+            break;
+        else if (choice == 1) {
+            createFile();
+            if (opened)
+                documentMenu();
+            else
+                waitEnter();
+        }
+        else if (choice == 2) {
+            openFile();
+            if (opened)
+                documentMenu();
+            else
+                waitEnter();
+        }
+        else if (choice == 3) {
+            listFiles();
+            waitEnter();
+        }
+        else {
+            cout << "Invalid choice.\n";
+            waitEnter();
+        }
+    }
+    clearScreen();
+    cout << "DocEd closed. Goodbye!\n";
     return 0;
 }
