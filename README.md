@@ -2,20 +2,20 @@
 # Team Members : Gaurav Mahajan, Bhavesh Borse
 # Document Editor
 
-# DOCED -- C++ Document Editor
+# DOCED  C++ Document Editor
 
 DOCED is a simple C++ console-based text editor developed in three
 versions. Each version adds useful features while keeping the program
 easy to use.
 
-## Version 1 -- Basic Editor
+## Version 1: Basic Editor
 
 -   Create, open, edit and save text files.
 -   Rename and delete files.
 -   View files and list available documents.
 -   Basic line editing and text search.
 
-## Version 2 -- Improved Editor
+## Version 2: Improved Editor
 
 -   Includes the basic features of Version 1.
 -   Find and replace text.
@@ -23,7 +23,7 @@ easy to use.
 -   Show line, word and character statistics.
 -   Improved document management.
 
-## Version 3 -- Advanced Editor
+## Version 3: Advanced Editor
 
 -   Supports TXT, C++, C, Python, Java, HTML, CSS, Markdown and other
     text-based files.
